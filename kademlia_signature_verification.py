@@ -11,9 +11,11 @@ from Crypto.Signature import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Hash import SHA256
 from Crypto import Random
+from collections import Counter
 import ipgetter
 import argparse
 import sys
+import re
 
 parser = argparse.ArgumentParser()
 
@@ -59,7 +61,17 @@ class FreemeValueSpiderCrawl(ValueSpiderCrawl):
 
     def _handleFoundValues(self, values):
         values = [tuple(el) for el in values]
-        return super(FreemeValueSpiderCrawl, self)._handleFoundValues(values)
+        valueCounts = Counter(values)
+        if len(valueCounts) != 1:
+            args = (self.node.long_id, str(values))
+            self.log.warning("Got multiple values for key %i: %s" % args)
+        value = valueCounts.most_common(1)[0][0]
+
+        peerToSaveTo = self.nearestWithoutValue.popleft()
+        if peerToSaveTo is not None:
+            d = self.protocol.callStore(peerToSaveTo, self.node.id, value, None)
+            return d.addCallback(lambda _: value)
+        return value
 
 
 class FreemeProtocol(KademliaProtocol, ProcessQueries):
@@ -80,19 +92,19 @@ class FreemeProtocol(KademliaProtocol, ProcessQueries):
                     self.log.debug("verification is succeeded for {0}".format(nodeid))
                     return KademliaProtocol.rpc_store(self, sender, nodeid, key, (result_key[0], value))
                 else:
-                    self.log.warn("verification is failed for {0}".format(nodeid))
+                    self.log.warning("verification is failed for {0}".format(nodeid))
                     return None
             else:
-                self.log.warn("nothing found for {0}".format(nodeid))
+                self.log.warning("nothing found for {0}".format(nodeid))
                 return None
 
         found_key = KademliaProtocol.rpc_find_value(self, sender, nodeid, key)
         if signed_message is None:
-            if not found_key:
+            if not found_key or not type(found_key) is dict:
                 self.log.debug("setting login for {0}".format(nodeid))
                 return KademliaProtocol.rpc_store(self, sender, nodeid, key, value)
             else:
-                self.log.warn("key is setted already")
+                self.log.warning("key is setted already")
                 return None
         else:
             return store(found_key["value"])
