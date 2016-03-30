@@ -11,9 +11,11 @@ from Crypto.Signature import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 from Crypto.Hash import SHA256
 from Crypto import Random
+from collections import Counter
 import ipgetter
 import argparse
 import sys
+import re
 
 parser = argparse.ArgumentParser()
 
@@ -59,7 +61,17 @@ class FreemeValueSpiderCrawl(ValueSpiderCrawl):
 
     def _handleFoundValues(self, values):
         values = [tuple(el) for el in values]
-        return super(FreemeValueSpiderCrawl, self)._handleFoundValues(values)
+        valueCounts = Counter(values)
+        if len(valueCounts) != 1:
+            args = (self.node.long_id, str(values))
+            self.log.warning("Got multiple values for key %i: %s" % args)
+        value = valueCounts.most_common(1)[0][0]
+
+        peerToSaveTo = self.nearestWithoutValue.popleft()
+        if peerToSaveTo is not None:
+            d = self.protocol.callStore(peerToSaveTo, self.node.id, value, None)
+            return d.addCallback(lambda _: value)
+        return value
 
 
 class FreemeProtocol(KademliaProtocol, ProcessQueries):
@@ -80,19 +92,19 @@ class FreemeProtocol(KademliaProtocol, ProcessQueries):
                     self.log.debug("verification is succeeded for {0}".format(nodeid))
                     return KademliaProtocol.rpc_store(self, sender, nodeid, key, (result_key[0], value))
                 else:
-                    self.log.warn("verification is failed for {0}".format(nodeid))
+                    self.log.warning("verification is failed for {0}".format(nodeid))
                     return None
             else:
-                self.log.warn("nothing found for {0}".format(nodeid))
+                self.log.warning("nothing found for {0}".format(nodeid))
                 return None
 
         found_key = KademliaProtocol.rpc_find_value(self, sender, nodeid, key)
         if signed_message is None:
-            if not found_key:
+            if not found_key or not type(found_key) is dict:
                 self.log.debug("setting login for {0}".format(nodeid))
                 return KademliaProtocol.rpc_store(self, sender, nodeid, key, value)
             else:
-                self.log.warn("key is setted already")
+                self.log.warning("key is setted already")
                 return None
         else:
             return store(found_key["value"])
@@ -182,9 +194,9 @@ class FreemeCommandLine(basic.LineReceiver, ProcessQueries):
         random_generator = Random.new().read
         private_key = RSA.generate(2048, random_generator)
         public_key = private_key.publickey()
-        with open("id_rsa", "w") as f_private:
+        with open("{0}_rsa".format(name), "w") as f_private:
             f_private.write(private_key.exportKey())
-        with open("id_rsa.pub", "w") as f_public:
+        with open("{0}_rsa.pub".format(name), "w") as f_public:
             f_public.write(public_key.exportKey())
         self.server.set(name, (public_key.exportKey(), None)).addCallback(self.process_set)
 
@@ -194,7 +206,7 @@ class FreemeCommandLine(basic.LineReceiver, ProcessQueries):
 
         def login(result):
             public_key = RSA.importKey(result[0])
-            with open("id_rsa", "r") as f_private:
+            with open("{0}_rsa".format(name), "r") as f_private:
                 private_key = RSA.importKey(f_private.read())
             signature = PKCS1_v1_5.new(private_key)
             hash = SHA256.new(my_ip)
