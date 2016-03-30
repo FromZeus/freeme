@@ -1,21 +1,21 @@
 from twisted.internet import reactor, defer, stdio
 from twisted.python import log
 from kademlia.network import Server
-from kademlia.utils import digest
 from kademlia.node import Node
+from kademlia.utils import digest
 from kademlia.crawling import ValueSpiderCrawl
 from kademlia.crawling import NodeSpiderCrawl
 from kademlia.protocol import KademliaProtocol
 from twisted.protocols import basic
 from Crypto.Signature import PKCS1_v1_5
 from Crypto.PublicKey import RSA
-from Crypto.Hash import SHA256
+from Crypto.Hash import SHA256, SHA
 from Crypto import Random
 from collections import Counter
 import ipgetter
+import random
 import argparse
 import sys
-import re
 
 parser = argparse.ArgumentParser()
 
@@ -37,6 +37,7 @@ parser.add_argument(
 parser.add_argument(
     '-p', dest='bootstrap_port', default=2277, help='Bootstrap node port address')
 args = parser.parse_args()
+
 
 class ProcessQueries():
 
@@ -115,10 +116,19 @@ class FreemeProtocol(KademliaProtocol, ProcessQueries):
         return d.addCallback(self.handleCallResponse, nodeToAsk)
 
 
+class FreemeNode(Node):
+    def __init__(self, id, ip=None, port=None):
+        Node.__init__(self, id, ip, port)
+
+    def distanceTo(self, node):
+        return long(digest(self.long_id).encode('hex'), 16) ^ long(digest(node.long_id).encode('hex'), 16)
+
+
 class FreemeServer(Server, ProcessQueries):
     def __init__(self, ksize=20, alpha=3, id=None, storage=None):
         super(FreemeServer, self).__init__(ksize, alpha, id, storage)
         self.protocol = FreemeProtocol(self.node, self.storage, ksize)
+        self.node = FreemeNode(id or digest(random.getrandbits(255)))
 
     def get(self, key):
         """
