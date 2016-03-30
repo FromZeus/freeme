@@ -1,21 +1,22 @@
 from twisted.internet import reactor, defer, stdio
 from twisted.python import log
 from kademlia.network import Server
-from kademlia.utils import digest
 from kademlia.node import Node
+from kademlia.utils import digest
 from kademlia.crawling import ValueSpiderCrawl
 from kademlia.crawling import NodeSpiderCrawl
 from kademlia.protocol import KademliaProtocol
 from twisted.protocols import basic
 from Crypto.Signature import PKCS1_v1_5
 from Crypto.PublicKey import RSA
-from Crypto.Hash import SHA256
+from Crypto.Hash import SHA256, SHA
 from Crypto import Random
 from collections import Counter
 import ipgetter
+import random
 import argparse
 import sys
-import re
+import os.path
 
 parser = argparse.ArgumentParser()
 
@@ -37,6 +38,7 @@ parser.add_argument(
 parser.add_argument(
     '-p', dest='bootstrap_port', default=2277, help='Bootstrap node port address')
 args = parser.parse_args()
+
 
 class ProcessQueries():
 
@@ -115,18 +117,21 @@ class FreemeProtocol(KademliaProtocol, ProcessQueries):
         return d.addCallback(self.handleCallResponse, nodeToAsk)
 
 
+class FreemeNode(Node):
+    def __init__(self, id, ip=None, port=None):
+        Node.__init__(self, id, ip, port)
+
+    def distanceTo(self, node):
+        return long(digest(self.long_id).encode('hex'), 16) ^ long(digest(node.long_id).encode('hex'), 16)
+
+
 class FreemeServer(Server, ProcessQueries):
     def __init__(self, ksize=20, alpha=3, id=None, storage=None):
         super(FreemeServer, self).__init__(ksize, alpha, id, storage)
         self.protocol = FreemeProtocol(self.node, self.storage, ksize)
+        self.node = FreemeNode(id or digest(random.getrandbits(255)))
 
     def get(self, key):
-        """
-        Get a key if the network has it.
-
-        Returns:
-            :class:`None` if not found, the value otherwise.
-        """
         node = Node(digest(key))
         nearest = self.protocol.router.findNeighbors(node)
         if len(nearest) == 0:
@@ -136,9 +141,6 @@ class FreemeServer(Server, ProcessQueries):
         return spider.find()
 
     def set(self, key, value, signed_message=None):
-        """
-        Set the given key to the given value in the network.
-        """
         self.log.debug("setting '%s' = '%s' on network" % (key, value))
         dkey = digest(key)
 
@@ -241,6 +243,13 @@ def bootstrapDone(found):
         print "Bootstrapped successfully!"
 
 
+def loadState(fname, server):
+    try:
+        server.loadState(fname)
+    except IOError, ex:
+        print ex
+
+
 def main():
     log.startLogging(sys.stdout)
     try:
@@ -248,10 +257,17 @@ def main():
         bootstrap_port = int(args.bootstrap_port)
 
         server = FreemeServer()
+        #loadState("state_file", server)
+        try:
+            server = server.loadState("state_file")
+        except IOError, ex:
+            print ex
         server.listen(bootstrap_port)
         server.bootstrap([(bootstrap_ip, bootstrap_port)]).addCallback(bootstrapDone)
+        server.saveStateRegularly("state_file", 60)
 
         stdio.StandardIO(FreemeCommandLine(server))
+
         reactor.run()
 
     except KeyboardInterrupt:
